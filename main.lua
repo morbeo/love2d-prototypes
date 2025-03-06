@@ -1,5 +1,5 @@
 local function lerp(a, b, t)
-    return a + (b - a) * t
+    return a * (1 - t) + b * t
 end
 
 Pixelized = {}
@@ -19,7 +19,8 @@ function Pixelized.new(image, positionX , positionY, duration)
         duration = duration or 1, -- default duration to 1 second if not provided
         timer = 0,
         state = "assembled",
-        disintegrateTimer = 0
+        disintegrateTimer = 0,
+        lerp_speed = 0.5
     }
     setmetatable(instance, { __index = Pixelized })
     for y = 0, imgHeight - 1 do
@@ -40,17 +41,22 @@ function Pixelized.new(image, positionX , positionY, duration)
 end
 
 function Pixelized:draw()
-    love.graphics.print("X "..self.x.." Y "..self.y, 20, 0)
+    local r, g, b, a = love.graphics.getColor() -- Save current color
+    love.graphics.print("source X "..self.x.."source Y "..self.y, 20, 0)
+    love.graphics.print("target X "..self.target.x.."target Y "..self.target.y, 20, 10)
     love.graphics.print("state "..self.state, 20, 20)
     love.graphics.print("timer "..self.timer, 20, 40)
     love.graphics.print("disintegrateTimer "..self.disintegrateTimer, 20, 60)
 
     -- draw bounding box
+    love.graphics.setColor(1, 0, 0)
     love.graphics.rectangle("line", self.x , self.y, self.imgWidth, self.imgHeight)
+    love.graphics.setColor(0, 1, 0)
+    love.graphics.rectangle("line", self.target.x , self.target.y, self.imgWidth, self.imgHeight)
 
-    local r, g, b, a = love.graphics.getColor() -- Save current color
+    love.graphics.setColor(r, g, b, a) -- Restore color
     if self.state == "assembled" or self.state == "move" then
-        love.graphics.draw(self.image, self.x, self.y)
+        love.graphics.draw(self.image, self.x - 1, self.y - 1)
     else
         for _, p in ipairs(self.pixels) do
             love.graphics.setColor(p.color.r, p.color.g, p.color.b, p.color.a)
@@ -75,32 +81,37 @@ function Pixelized:update(dt)
         if self.timer <= 0 then
             self.timer = 0
             self.disintegrateTimer = 0
+            self.x = self.target.x
+            self.y = self.target.y
             self.state = "assembled"
         else
             if self.state == "disintegrate" then
                 self.state = "reform"
                 for _, p in ipairs(self.pixels) do
-                    p.target.x = self.x + p.image.x
-                    p.target.y = self.y + p.image.y
+                    p.target.x = self.target.x + p.image.x
+                    p.target.y = self.target.y + p.image.y
                 end
             end
         end
     end
-    for _, p in ipairs(self.pixels) do
-        p.last.x = p.global.x
-        p.last.y = p.global.y
-        if self.state == "disintegrate" then
-            p.global.x = lerp(p.global.x, p.target.x, math.sqrt(dt / self.duration))
-            p.global.y = lerp(p.global.y, p.target.y, math.sqrt(dt / self.duration))
-        -- elseif self.state == "move" then
-        --     p.global.x = lerp(p.global.x, p.target.x, math.sqrt(dt / self.timer))
-        --     p.global.y = lerp(p.global.y, p.target.y, math.sqrt(dt / self.timer))
-        else
-            p.global.x = lerp(p.global.x, self.x + p.image.x, math.sqrt(dt / self.duration))
-            p.global.y = lerp(p.global.y, self.y + p.image.y, math.sqrt(dt / self.duration))
-        end
-        if p.global.x == p.target.x and p.global.y == p.target.y then
-            self.disintegrateTimer = 0
+    local blend = math.sqrt(dt * self.lerp_speed)
+    if self.state == "move" then
+        self.x = lerp(self.x, self.target.x, blend)
+        self.y = lerp(self.y, self.target.y, blend)
+    else
+        for _, p in ipairs(self.pixels) do
+            p.last.x = p.global.x
+            p.last.y = p.global.y
+            if self.state == "disintegrate" then
+                p.global.x = lerp(p.global.x, p.target.x, blend)
+                p.global.y = lerp(p.global.y, p.target.y, blend)
+            elseif self.state == "move" then
+                 p.global.x = lerp(p.global.x, p.target.x, math.sqrt(dt / self.timer))
+                 p.global.y = lerp(p.global.y, p.target.y, math.sqrt(dt / self.timer))
+            else
+                p.global.x = lerp(p.global.x, self.target.x + p.image.x, blend)
+                p.global.y = lerp(p.global.y, self.target.y + p.image.y, blend)
+            end
         end
     end
 end
@@ -112,8 +123,8 @@ function Pixelized:moveabsolute(x, y, duration)
     else
         self.timer = duration or self.duration
     end
-    self.x = x
-    self.y = y
+    self.target.x = x
+    self.target.y = y
     for _, p in ipairs(self.pixels) do
         p.target.x = p.image.x + x
         p.target.y = p.image.y + y
@@ -127,11 +138,11 @@ function Pixelized:moverelative(x, y, duration)
     else
         self.timer = duration or self.duration
     end
-    self.x = self.x + x
-    self.y = self.y + y
+    self.target.x = self.x + x
+    self.target.y = self.y + y
     for _, p in ipairs(self.pixels) do
-        p.target.x = p.global.x + x
-        p.target.y = p.global.y + y
+        p.target.x = self.target.x + p.image.x
+        p.target.y = self.target.y + p.image.y
     end
 end
 
@@ -139,8 +150,8 @@ function Pixelized:teleport(x, y, duration)
     self.state = "disintegrate"
     self.timer = duration or self.duration
     local distance = math.sqrt(( self.x - x )^2 + ( self.y - y )^2)
-    self.x = x - self.imgWidth / 2
-    self.y = y - self.imgHeight / 2
+    self.target.x = x - self.imgWidth / 2
+    self.target.y = y - self.imgHeight / 2
     for _,p in ipairs(self.pixels) do
         local angle = math.random() * 2 * math.pi
         local radius = math.random() * distance
@@ -183,7 +194,7 @@ function Pixelized:input(key)
 end
 
 function love.load()
-    Tank = Pixelized.new("horror.png", 200, 200) -- Set duration to 2 seconds
+    Tank = Pixelized.new("bullseye.png", 200, 200) -- Set duration to 2 seconds
 end
 
 function love.update(dt)
